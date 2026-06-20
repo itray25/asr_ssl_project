@@ -1,13 +1,13 @@
 # 基于语音自监督表征的低资源 ASR
 
-本项目用于课程大作业方向一：基于语音自监督表征的低资源英文 ASR。项目比较传统 `log-Mel + CTC` 与语音自监督表征 `wav2vec2 / HuBERT + CTC` 在 LibriSpeech 低资源设置下的表现，并进一步分析不同 hidden layer 对识别性能的影响。
+本项目用于课程大作业方向一：基于语音自监督表征的低资源英文 ASR。项目比较传统 `log-Mel + CTC` 与语音自监督表征 `wav2vec2 / HuBERT + CTC` 在 LibriSpeech 低资源设置下的表现，并进一步分析 hidden layer 选择和训练数据规模对识别性能的影响。
 
-当前主结论是：在 5 小时低资源训练、冻结 SSL encoder、只训练 CTC head 的条件下，`wav2vec2` 和 `HuBERT` 的最佳表征层均为 `layer 9`，而不是默认最后层。最终主结果建议使用：
+当前主结论：
 
-```text
-wav2vec2 layer 9 + CTC
-HuBERT layer 9 + CTC
-```
+- 传统 `log-Mel + CTC` 在 1 小时低资源设置下几乎无法得到可用转写。
+- `wav2vec2` 和 `HuBERT` 的最佳表征层均为 `layer 9`，而不是默认最后层。
+- 在最佳 layer 9 设置下，训练数据从 1h 增加到 5h 带来显著提升；从 5h 增加到 10h 后收益变小。
+- 当前最佳结果来自 `HuBERT layer 9 + CTC, 10h`，test-clean `WER=0.6032`，`CER=0.1967`。
 
 ## 已实现实验
 
@@ -27,6 +27,10 @@ HuBERT layer 9 + CTC
    - 比较 layer `3, 6, 9, 12`。
    - 结论表明 layer 9 最适合当前低资源 CTC ASR 设置。
 
+5. `layer 9 training-scale study`
+   - 固定使用上一步实验所得的最佳layer： layer 9，比较 `1h / 5h / 10h` 训练数据规模。
+   - 用于分析低资源条件下数据规模对性能的影响。
+
 当前未实现 k-means discrete units、token 去重、duration modeling、BPE、beam search 和语言模型融合。
 
 ## 项目结构
@@ -44,6 +48,12 @@ asr_ssl_project/
     hubert_ctc_frozen_5h.yaml
     wav2vec2_layer_ablation_frozen_5h.yaml
     hubert_layer_ablation_frozen_5h.yaml
+    wav2vec2_layer9_frozen_1h.yaml
+    wav2vec2_layer9_frozen_5h.yaml
+    wav2vec2_layer9_frozen_10h.yaml
+    hubert_layer9_frozen_1h.yaml
+    hubert_layer9_frozen_5h.yaml
+    hubert_layer9_frozen_10h.yaml
   src/
     data/
       librispeech.py
@@ -103,12 +113,8 @@ data:
 
 ```yaml
 max_train_hours: 1.0
-```
-
-或：
-
-```yaml
 max_train_hours: 5.0
+max_train_hours: 10.0
 ```
 
 如果同时设置 `max_train_hours` 和 `max_train_samples`，代码会先按小时数截断，再按样本数截断。
@@ -143,11 +149,44 @@ C:\Users\ASUS\Anaconda3\python.exe run_layer_ablation.py --config configs/wav2ve
 C:\Users\ASUS\Anaconda3\python.exe run_layer_ablation.py --config configs/hubert_layer_ablation_frozen_5h.yaml
 ```
 
+最佳 layer 9 的训练数据规模实验：
+
+```powershell
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/wav2vec2_layer9_frozen_1h.yaml
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/wav2vec2_layer9_frozen_5h.yaml
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/wav2vec2_layer9_frozen_10h.yaml
+
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/hubert_layer9_frozen_1h.yaml
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/hubert_layer9_frozen_5h.yaml
+C:\Users\ASUS\Anaconda3\python.exe train.py --config configs/hubert_layer9_frozen_10h.yaml
+```
+
+说明：5h 的 layer 9 结果也可以直接复用 ablation 中的 `layer_9` 目录。当前项目已将这两份 5h layer 9 结果复制到统一目录：
+
+```text
+runs/wav2vec2_layer9_frozen_5h/
+runs/hubert_layer9_frozen_5h/
+```
+
 ## 评估命令
+
+5 小时主实验：
 
 ```powershell
 C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/wav2vec2_ctc_frozen_5h.yaml --checkpoint runs/wav2vec2_ctc_frozen_5h/best.pt --split test-clean
 C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/hubert_ctc_frozen_5h.yaml --checkpoint runs/hubert_ctc_frozen_5h/best.pt --split test-clean
+```
+
+layer 9 数据规模实验：
+
+```powershell
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/wav2vec2_layer9_frozen_1h.yaml --checkpoint runs/wav2vec2_layer9_frozen_1h/best.pt --split test-clean
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/wav2vec2_layer9_frozen_5h.yaml --checkpoint runs/wav2vec2_layer9_frozen_5h/best.pt --split test-clean
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/wav2vec2_layer9_frozen_10h.yaml --checkpoint runs/wav2vec2_layer9_frozen_10h/best.pt --split test-clean
+
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/hubert_layer9_frozen_1h.yaml --checkpoint runs/hubert_layer9_frozen_1h/best.pt --split test-clean
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/hubert_layer9_frozen_5h.yaml --checkpoint runs/hubert_layer9_frozen_5h/best.pt --split test-clean
+C:\Users\ASUS\Anaconda3\python.exe evaluate.py --config configs/hubert_layer9_frozen_10h.yaml --checkpoint runs/hubert_layer9_frozen_10h/best.pt --split test-clean
 ```
 
 ablation 脚本会自动对各层 best checkpoint 运行 test-clean 评估，并写入：
@@ -177,6 +216,17 @@ runs/*_layer_ablation_frozen_5h/layer_ablation_results.json
 | HuBERT | 6 | 0.7583 | 0.2734 | 0.7598 | 0.2777 |
 | HuBERT | 9 | **0.6019** | **0.1962** | **0.6036** | **0.1986** |
 | HuBERT | 12 | 0.7148 | 0.2420 | 0.7178 | 0.2452 |
+
+最佳 layer 9 的训练数据规模实验：
+
+| Model | Train Hours | Dev WER | Dev CER | Test WER | Test CER |
+|---|---:|---:|---:|---:|---:|
+| wav2vec2 layer 9 | 1h | 0.7732 | 0.3430 | 0.7935 | 0.3592 |
+| wav2vec2 layer 9 | 5h | 0.6166 | 0.1988 | 0.6319 | 0.2076 |
+| wav2vec2 layer 9 | 10h | **0.6008** | **0.1923** | **0.6112** | **0.1994** |
+| HuBERT layer 9 | 1h | 0.7037 | 0.2639 | 0.7075 | 0.2672 |
+| HuBERT layer 9 | 5h | 0.6019 | 0.1962 | 0.6036 | 0.1986 |
+| HuBERT layer 9 | 10h | **0.5975** | **0.1932** | **0.6032** | **0.1967** |
 
 ## 查看结果文件
 
