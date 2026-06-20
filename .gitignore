@@ -1,0 +1,27 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# Data and outputs
+data/
+runs/
+*.pt
+*.ckpt
+*.pth
+
+# Large archives
+*.tar.gz
+*.zip
+*.flac
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/

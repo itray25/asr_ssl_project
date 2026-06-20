@@ -1,0 +1,8 @@
+torch>=2.1.0
+torchaudio>=2.1.0
+transformers>=4.38.0
+datasets>=2.18.0
+jiwer>=3.0.0
+pyyaml>=6.0.0
+tqdm>=4.66.0
+soundfile>=0.12.1

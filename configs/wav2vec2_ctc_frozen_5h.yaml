@@ -1,0 +1,42 @@
+experiment:
+  name: wav2vec2_ctc_frozen_5h
+  output_dir: runs/wav2vec2_ctc_frozen_5h
+  seed: 1337
+
+data:
+  dataset: librispeech
+  root: data
+  train_split: train-clean-100
+  dev_split: dev-clean
+  test_split: test-clean
+  download: false
+  sample_rate: 16000
+  max_train_hours: 5.0
+  max_train_samples: null
+  max_eval_samples: null
+
+vocab:
+  type: char
+
+model:
+  type: ssl_ctc
+  ssl_model_name: facebook/wav2vec2-base
+  ssl_model_type: wav2vec2
+  freeze_encoder: true
+  hidden_layer: null
+  dropout: 0.1
+
+training:
+  device: auto
+  epochs: 10
+  batch_size: 2
+  num_workers: 0
+  learning_rate: 0.001
+  weight_decay: 0.0
+  grad_clip: 5.0
+  log_interval: 1
+  save_best: true
+
+decoding:
+  strategy: greedy
+
