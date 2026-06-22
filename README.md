@@ -8,6 +8,7 @@
 - `wav2vec2` 和 `HuBERT` 的最佳表征层均为 `layer 9`，而不是默认最后层。
 - 在最佳 layer 9 设置下，训练数据从 1h 增加到 5h 带来显著提升；从 5h 增加到 10h 后收益变小。
 - 当前最佳结果来自 `HuBERT layer 9 + CTC, 10h`，test-clean `WER=0.6032`，`CER=0.1967`。
+- 已基于最佳 layer 9 表征实现 K-means discrete units 分析，比较 `K=100/500` 下的 token rate、bitrate、dedup 压缩率和 codebook 使用情况。
 
 ## 已实现实验
 
@@ -31,7 +32,12 @@
    - 固定使用上一步实验所得的最佳layer： layer 9，比较 `1h / 5h / 10h` 训练数据规模。
    - 用于分析低资源条件下数据规模对性能的影响。
 
-当前未实现 k-means discrete units、token 去重、duration modeling、BPE、beam search 和语言模型融合。
+6. `K-means discrete speech units`
+   - 基于最佳 layer 9 continuous SSL representations 提取帧级 hidden states。
+   - 使用 K-means 构建 `K=100/500` 离散 codebook。
+   - 分析 token rate、bitrate、token dedup、duration/run-length、codebook usage 和 entropy。
+
+当前未实现 unit-based ASR 训练、BPE、beam search 和语言模型融合。
 
 ## 项目结构
 
@@ -71,25 +77,22 @@ asr_ssl_project/
   train.py
   evaluate.py
   run_layer_ablation.py
+  analyze_kmeans_units.py
 ```
 
 ## 环境安装
 
-建议使用独立环境。当前机器上可使用 Anaconda Python：
+建议使用独立环境。当前项目可使用本地 `.conda` 环境：
 
 ```powershell
-C:\Users\ASUS\Anaconda3\python.exe -m pip install -r requirements.txt
+& ".conda\python.exe" -m pip install -r requirements.txt
 ```
 
-如果只缺少 Hugging Face 或音频读取依赖，可单独安装：
-
-```powershell
-C:\Users\ASUS\Anaconda3\python.exe -m pip install transformers datasets jiwer soundfile
-```
+如果使用其他 Anaconda/Miniconda 环境，也可以将上面的 Python 路径替换为对应环境的 `python.exe`。
 
 ## 数据准备
 
-本项目默认读取本地 LibriSpeech：
+本项目默认读取本地 LibriSpeech。标准目录为：
 
 ```text
 asr_ssl_project/
@@ -98,6 +101,17 @@ asr_ssl_project/
       train-clean-100/
       dev-clean/
       test-clean/
+```
+
+如果解压后形成如下多一层目录的结构，当前 `src/data/librispeech.py` 也可以读取：
+
+```text
+asr_ssl_project/
+  data/
+    LibriSpeech/
+      train-clean-100/LibriSpeech/train-clean-100/
+      dev-clean/LibriSpeech/dev-clean/
+      test-clean/LibriSpeech/test-clean/
 ```
 
 配置中应保持：
@@ -195,6 +209,42 @@ ablation 脚本会自动对各层 best checkpoint 运行 test-clean 评估，并
 runs/*_layer_ablation_frozen_5h/layer_ablation_results.json
 ```
 
+## K-means 离散单元分析
+
+`analyze_kmeans_units.py` 用于将 SSL continuous hidden states 离散化为 K-means speech units，并统计 token rate、bitrate、去重压缩率、duration/run-length 和 codebook 使用情况。该脚本不重新训练 ASR 模型，主要用于分析 continuous representations 与 discrete speech units 的压缩性和复杂度。
+
+先运行一个小规模 smoke test：
+
+```powershell
+& ".conda\python.exe" analyze_kmeans_units.py --config configs/hubert_layer9_frozen_10h.yaml --split dev-clean --k 20 --max-frames 2000 --max-utts 3 --output runs/kmeans_units/smoke_hubert_layer9_k20.json
+```
+
+正式实验命令：
+
+```powershell
+& ".conda\python.exe" analyze_kmeans_units.py --config configs/hubert_layer9_frozen_10h.yaml --split dev-clean --k 100 --max-frames 200000 --output runs/kmeans_units/hubert_layer9_k100_dev.json
+& ".conda\python.exe" analyze_kmeans_units.py --config configs/hubert_layer9_frozen_10h.yaml --split dev-clean --k 500 --max-frames 200000 --output runs/kmeans_units/hubert_layer9_k500_dev.json
+
+& ".conda\python.exe" analyze_kmeans_units.py --config configs/wav2vec2_layer9_frozen_10h.yaml --split dev-clean --k 100 --max-frames 200000 --output runs/kmeans_units/wav2vec2_layer9_k100_dev.json
+& ".conda\python.exe" analyze_kmeans_units.py --config configs/wav2vec2_layer9_frozen_10h.yaml --split dev-clean --k 500 --max-frames 200000 --output runs/kmeans_units/wav2vec2_layer9_k500_dev.json
+```
+
+输出文件位于：
+
+```text
+runs/kmeans_units/*.json
+```
+
+主要字段包括：
+
+- `token_rate`：原始离散 unit 每秒 token 数
+- `dedup_token_rate`：合并连续重复 unit 后的每秒 token 数
+- `bitrate` / `dedup_bitrate`：离散表示的信息率
+- `dedup_compression_ratio`：去重压缩率
+- `used_units`：实际使用的 codebook 数量
+- `entropy_bits` / `effective_num_units`：unit 分布熵和有效单元数
+- `avg_run_length_frames` / `max_run_length_frames`：连续重复 unit 的时长统计
+
 ## 当前主要结果
 
 5 小时 frozen SSL 主实验：
@@ -228,6 +278,24 @@ runs/*_layer_ablation_frozen_5h/layer_ablation_results.json
 | HuBERT layer 9 | 5h | 0.6019 | 0.1962 | 0.6036 | 0.1986 |
 | HuBERT layer 9 | 10h | **0.5975** | **0.1932** | **0.6032** | **0.1967** |
 
+K-means 离散单元分析，基于 `dev-clean` 和 layer 9 hidden states：
+
+| Model | K | Token rate | Dedup token rate | Bitrate | Dedup bitrate | Compression | Used units | Entropy | Effective units |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| HuBERT | 100 | 49.91 | 26.20 | 331.59 | 174.07 | 1.90x | 100/100 | 6.53 | 92.71 |
+| HuBERT | 500 | 49.91 | 29.13 | 447.48 | 261.20 | 1.71x | 500/500 | 8.75 | 430.31 |
+| wav2vec2 | 100 | 49.91 | 30.08 | 331.59 | 199.88 | 1.66x | 100/100 | 6.46 | 88.09 |
+| wav2vec2 | 500 | 49.91 | 35.22 | 447.48 | 315.81 | 1.42x | 500/500 | 8.73 | 423.42 |
+
+| Model | K | Avg run length | Max run length |
+|---|---:|---:|---:|
+| HuBERT | 100 | 1.90 frames | 33 frames |
+| HuBERT | 500 | 1.71 frames | 36 frames |
+| wav2vec2 | 100 | 1.66 frames | 21 frames |
+| wav2vec2 | 500 | 1.42 frames | 17 frames |
+
+HuBERT 的 dedup compression ratio 高于 wav2vec2，说明其离散 unit 序列在时间上更稳定；`K=500` 的 effective units 更多，但 bitrate 和 dedup 后复杂度也更高。
+
 ## 查看结果文件
 
 每个实验会在 `runs/` 下保存：
@@ -242,11 +310,22 @@ runs/*_layer_ablation_frozen_5h/layer_ablation_results.json
 - `<split>_predictions.jsonl`：测试集 reference/hypothesis
 - `train.log`：训练日志
 
+K-means 离散单元分析会在 `runs/kmeans_units/` 下保存 JSON 统计文件，例如：
+
+- `hubert_layer9_k100_dev.json`
+- `hubert_layer9_k500_dev.json`
+- `wav2vec2_layer9_k100_dev.json`
+- `wav2vec2_layer9_k500_dev.json`
+
 注意：`runs/*/config.yaml` 是训练输出副本。后续修改实验配置时，应编辑 `configs/*.yaml`。
 
 ## Future Work
 
-后续可以实现 k-means discrete units，例如 `K=100` 和 `K=500`，比较 continuous SSL representations 与 discrete speech units。
+后续可以继续扩展：
 
-也可以进一步分析 token rate、bitrate、token dedup、duration modeling 和 BPE 对识别性能、压缩率和模型复杂度的影响。这些内容当前尚未实现。
+- 使用离散语音单元重新训练 unit-based ASR，并与 continuous CTC 系统直接比较 WER/CER。
+- 对离散 unit 序列应用 BPE，分析更长 unit pattern 对序列长度和识别建模的影响。
+- 引入 duration modeling，补偿 token dedup 后丢失的显式时长信息。
+- 加入 beam search 或语言模型融合，降低 greedy CTC decoding 带来的词边界和拼写错误。
+- fine-tune SSL encoder，并为 encoder 和 CTC head 设置不同学习率。
 
