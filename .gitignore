@@ -8,8 +8,8 @@ venv/
 .env
 
 # Data and outputs
-data/
-runs/
+/data/
+/runs/
 *.pt
 *.ckpt
 *.pth

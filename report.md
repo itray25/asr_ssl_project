@@ -100,6 +100,28 @@ waveform -> wav2vec2 / HuBERT -> hidden states -> CTC head -> text
 
 从 1h 增加到 5h 时，两种模型均获得显著提升。wav2vec2 的 test WER 从 `0.7935` 降至 `0.6319`，HuBERT 的 test WER 从 `0.7075` 降至 `0.6036`。从 5h 增加到 10h 后收益明显变小，尤其 HuBERT 的 test WER 基本保持在 `0.603` 附近，说明 frozen encoder + linear CTC head + greedy decoding 已接近当前设置下的瓶颈。
 
+### 4.5 K-means 离散语音单元分析
+
+为了进一步比较 continuous SSL representations 与 discrete speech units，本实验使用最佳 ASR 设置中的 layer 9 表征进行 K-means 离散化。具体做法是从 `dev-clean` 提取 HuBERT / wav2vec2 layer 9 的帧级 hidden states，并分别训练 `K=100` 和 `K=500` 的 K-means codebook。随后将每帧连续向量映射为离散 unit id，并统计 token rate、bitrate、去重后的 token rate、压缩率和 codebook 使用情况。
+
+| Model | Layer | K | Token rate | Dedup token rate | Bitrate | Dedup bitrate | Compression | Used units | Entropy | Effective units |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| HuBERT | 9 | 100 | 49.91 | 26.20 | 331.59 | 174.07 | 1.90x | 100/100 | 6.53 | 92.71 |
+| HuBERT | 9 | 500 | 49.91 | 29.13 | 447.48 | 261.20 | 1.71x | 500/500 | 8.75 | 430.31 |
+| wav2vec2 | 9 | 100 | 49.91 | 30.08 | 331.59 | 199.88 | 1.66x | 100/100 | 6.46 | 88.09 |
+| wav2vec2 | 9 | 500 | 49.91 | 35.22 | 447.48 | 315.81 | 1.42x | 500/500 | 8.73 | 423.42 |
+
+| Model | K | Avg run length | Max run length |
+|---|---:|---:|---:|
+| HuBERT | 100 | 1.90 frames | 33 frames |
+| HuBERT | 500 | 1.71 frames | 36 frames |
+| wav2vec2 | 100 | 1.66 frames | 21 frames |
+| wav2vec2 | 500 | 1.42 frames | 17 frames |
+
+原始 token rate 均约为 `49.91 tokens/sec`，这是由 SSL encoder 的帧率决定的。`K=500` 相比 `K=100` 使用更大的 codebook，因此 bitrate 更高，但 effective units 也明显更多，表示离散单元能刻画更细粒度的声学差异。对连续重复 unit 进行 dedup 后，token rate 和 bitrate 均显著下降，说明离散 unit 序列存在较强的时间冗余。
+
+HuBERT 的 dedup 压缩率高于 wav2vec2，且平均 run length 更长，说明 HuBERT layer 9 的离散单元在时间上更加稳定；wav2vec2 的 dedup token rate 更高，说明其 unit 序列变化更频繁。两种模型的 codebook 都被充分使用，表明 K-means 离散化没有出现明显的 codebook collapse。
+
 ## 5. 分析
 
 ### 5.1 SSL 表征优于传统 log-Mel baseline
@@ -114,7 +136,13 @@ ablation 显示，wav2vec2 和 HuBERT 的 layer 9 均取得最佳结果。特别
 
 固定最佳 layer 9 后，1h 到 5h 的性能提升最明显；5h 到 10h 的提升较小。HuBERT 在 1h 条件下明显优于 wav2vec2，但在 10h 时两者差距缩小，说明随着标注数据增加，wav2vec2 layer 9 也能逐渐被 CTC head 更好利用。
 
-### 5.4 错误类型
+### 5.4 离散单元的压缩性与稳定性
+
+K-means 离散化将 768 维连续 SSL hidden states 转换为低 bitrate 的符号序列。相比原始帧级 unit 序列，dedup 能显著降低 token rate 和 bitrate，例如 HuBERT `K=100` 从 `331.59 bps` 降至 `174.07 bps`。但 dedup 同时移除了显式时长信息，因此如果后续将离散 unit 用于 unit-based ASR 或 TTS，需要额外的 duration modeling 来恢复时间结构。
+
+在相同 codebook size 下，HuBERT 的 dedup compression ratio 高于 wav2vec2，说明其离散 unit 在相邻帧之间更稳定。这与 HuBERT 在连续表征 ASR 中略优于 wav2vec2 的结果一致，表明更稳定的中高层语音表征可能更适合低资源识别和离散化建模。
+
+### 5.5 错误类型
 
 最佳模型仍存在明显错误，主要包括：
 
@@ -134,7 +162,7 @@ WER = 0.6032
 CER = 0.1967
 ```
 
-因此，最终系统建议采用 `HuBERT layer 9 + CTC` 作为当前阶段的最佳低资源 ASR 系统，同时将 `wav2vec2 layer 9 + CTC` 作为主要 SSL 对比系统。
+因此，最终系统建议采用 `HuBERT layer 9 + CTC` 作为当前阶段的最佳低资源 ASR 系统，同时将 `wav2vec2 layer 9 + CTC` 作为主要 SSL 对比系统。进一步的 K-means 实验表明，最佳层的连续 SSL 表征可以被压缩为较低 bitrate 的离散语音单元；其中 HuBERT 离散单元在时间上更稳定，dedup 后具有更高压缩率。
 
 ## 7. 后续工作
 
@@ -142,7 +170,7 @@ CER = 0.1967
 
 - fine-tuning SSL encoder，并为 encoder/head 设置不同学习率
 - beam search 或语言模型融合
-- k-means discrete units，例如 `K=100/500`
-- continuous vs discrete units 对比
-- token rate、bitrate 和压缩效率分析
+- 使用离散语音单元重新训练 unit-based ASR，并与 continuous CTC 系统直接比较 WER/CER
+- 对离散 unit 序列进一步使用 BPE 或语言模型建模
+- 引入 duration modeling，分析 dedup unit 序列在保留语音内容和时长信息之间的权衡
 
